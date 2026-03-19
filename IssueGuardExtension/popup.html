@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Secret Detector - GitHub Extension</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            width: 350px;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background: linear-gradient(135deg, #0f0f0f 0%, #1a1a1a 100%);
+            color: #333;
+            padding: 0;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #000000 0%, #1a1a1a 50%, #2d2d2d 100%);
+            padding: 24px;
+            text-align: center;
+            border-bottom: 3px solid #3b82f6;
+        }
+        
+        .header h1 {
+            font-size: 20px;
+            color: #ffffff;
+            margin-bottom: 8px;
+            font-weight: 700;
+            text-shadow: 0 2px 8px rgba(59, 130, 246, 0.5);
+        }
+        
+        .header p {
+            font-size: 13px;
+            color: #a3a3a3;
+            line-height: 1.5;
+        }
+        
+        .content {
+            background: white;
+            padding: 24px;
+        }
+        
+        .feature {
+            display: flex;
+            align-items: center;
+            margin-bottom: 16px;
+            padding: 12px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+        
+        .feature:hover {
+            background: #e9ecef;
+            transform: translateX(5px);
+        }
+        
+        .feature-icon {
+            font-size: 24px;
+            margin-right: 12px;
+            min-width: 30px;
+            text-align: center;
+        }
+        
+        .feature-text {
+            flex: 1;
+        }
+        
+        .feature-title {
+            font-weight: 600;
+            font-size: 14px;
+            color: #333;
+            margin-bottom: 4px;
+        }
+        
+        .feature-desc {
+            font-size: 12px;
+            color: #666;
+            line-height: 1.4;
+        }
+        
+        .status-section {
+            margin-top: 20px;
+            padding: 16px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 8px;
+            color: white;
+            text-align: center;
+        }
+        
+        .status-section h3 {
+            font-size: 14px;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+        
+        .status-indicators {
+            display: flex;
+            justify-content: center;
+            gap: 12px;
+            margin-top: 12px;
+        }
+        
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        
+        .status-dot.green {
+            background: #4caf50;
+            box-shadow: 0 0 10px rgba(76, 175, 80, 0.8);
+        }
+        
+        .status-dot.red {
+            background: #f44336;
+            box-shadow: 0 0 10px rgba(244, 67, 54, 0.8);
+        }
+        
+        .status-dot.yellow {
+            background: #ff9800;
+            box-shadow: 0 0 10px rgba(255, 152, 0, 0.8);
+        }
+        
+        .status-label {
+            font-size: 11px;
+            opacity: 0.9;
+            margin-top: 4px;
+        }
+        
+        .footer {
+            background: rgba(255, 255, 255, 0.95);
+            padding: 16px;
+            text-align: center;
+            font-size: 11px;
+            color: #999;
+            border-top: 1px solid #e0e0e0;
+        }
+        
+        .footer a {
+            color: #667eea;
+            text-decoration: none;
+            font-weight: 600;
+        }
+        
+        .footer a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Secret Detector</h1>
+        <p>Real-time secret scanning for GitHub</p>
+    </div>
+    
+    <div class="content">
+        <div class="feature">
+            <div class="feature-text">
+                <div class="feature-title">Real-Time Scanning</div>
+                <div class="feature-desc">Automatically checks your text with 1 second debounce delay</div>
+            </div>
+        </div>
+        
+        <div class="feature">
+            <div class="feature-text">
+                <div class="feature-title">AI-Powered Detection</div>
+                <div class="feature-desc">Uses advanced ML models to identify secrets</div>
+            </div>
+        </div>
+        
+        <div class="feature">
+            <div class="feature-text">
+                <div class="feature-title">Visual Highlights</div>
+                <div class="feature-desc">Inline highlighting of detected secrets with hover tooltips</div>
+            </div>
+        </div>
+        
+        <div class="feature">
+            <div class="feature-text">
+                <div class="feature-title">Smart Indicators</div>
+                <div class="feature-desc">Color-coded badge showing security status at a glance</div>
+            </div>
+        </div>
+        
+        <div class="status-section">
+            <h3>Status Indicators</h3>
+            <div class="status-indicators">
+                <div>
+                    <div class="status-dot green"></div>
+                    <div class="status-label">Safe</div>
+                </div>
+                <div>
+                    <div class="status-dot red"></div>
+                    <div class="status-label">Secrets Found</div>
+                </div>
+                <div>
+                    <div class="status-dot yellow"></div>
+                    <div class="status-label">Error</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="footer">
+        Protecting your secrets, one commit at a time
+    </div>
+</body>
+</html>
