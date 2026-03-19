@@ -11,7 +11,7 @@ The overall methodology of IssueGuard is shown below:
 IssueGuard classifies extracted candidates into two categories: **Secret** and **Non-sensitive**, based on the annotation criteria defined in the following work:
 
 *Sadif Ahmed, Md Nafiu Rahman, Zahin Wahab, Gias Uddin, and Rifat Shahriyar. "Secret Breach Prevention in Software Issue Reports." (2025).*
-Link: https://arxiv.org/abs/2410.23657
+[Paper Link](https://2026.msrconf.org/details/msr-2026-technical-papers/15/Secret-Leak-Detection-in-Software-Issue-Reports-using-LLMs-A-Comprehensive-Evaluatio)
 
 
 ## System Requirements
