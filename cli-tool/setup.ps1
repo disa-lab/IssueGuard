@@ -71,7 +71,8 @@ if ($profileContent -and $profileContent.Contains($Marker)) {
 $FunctionBlock = @"
 
 $Marker
-# Wraps ``gh issue create`` and ``gh issue edit`` to scan for secrets via IssueGuard.
+# Wraps ``gh issue create/edit/comment`` and ``glab issue create/update/note``
+# to scan for secrets via IssueGuard.
 # To remove, delete this block from your PowerShell profile.
 function Invoke-GhIssueGuard {
     `$args_list = `$args
@@ -87,7 +88,22 @@ function Invoke-GhIssueGuard {
     }
 }
 
+function Invoke-GlabIssueGuard {
+    `$args_list = `$args
+
+    # Check if this is a ``glab issue create``, ``glab issue update``, or ``glab issue note`` command
+    `$positionals = `$args_list | ForEach-Object { [string]`$_ } | Where-Object { -not `$_.StartsWith('-') }
+    `$isIssueGuarded = (`$positionals.Count -ge 2) -and (`$positionals[0] -eq 'issue') -and ((`$positionals[1] -eq 'create') -or (`$positionals[1] -eq 'update') -or (`$positionals[1] -eq 'note'))
+
+    if (`$isIssueGuarded) {
+        & $python "$Wrapper" --glab @args_list
+    } else {
+        & (Get-Command glab -CommandType Application | Select-Object -First 1).Source @args_list
+    }
+}
+
 Set-Alias -Name gh -Value Invoke-GhIssueGuard -Scope Global -Force
+Set-Alias -Name glab -Value Invoke-GlabIssueGuard -Scope Global -Force
 $MarkerEnd
 "@
 

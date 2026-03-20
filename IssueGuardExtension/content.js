@@ -398,6 +398,24 @@ function createHighlightOverlay(textarea, secretString) {
   return overlay;
 }
 
+// Counter for unique per-element CSS highlight names
+let _highlightIdCounter = 0;
+
+// Ensure a ::highlight() CSS rule exists for a given highlight name
+function ensureHighlightCSS(name) {
+  const styleId = 'issueguard-highlight-style';
+  let styleEl = document.querySelector('#' + styleId);
+  if (!styleEl) {
+    styleEl = document.createElement('style');
+    styleEl.id = styleId;
+    document.head.appendChild(styleEl);
+  }
+  // Check if this name already has a rule
+  if (!styleEl.textContent.includes('::highlight(' + name + ')')) {
+    styleEl.textContent += `\n    ::highlight(${name}) { background-color: rgba(244, 67, 54, 0.35); color: inherit; }\n`;
+  }
+}
+
 // Function to highlight secrets in contenteditable elements using CSS Custom Highlight API
 // This API highlights text without modifying the DOM structure
 function updateHighlightPositionsContentEditable(element, secretStrings) {
@@ -407,8 +425,15 @@ function updateHighlightPositionsContentEditable(element, secretStrings) {
     return;
   }
 
-  // Clear any existing highlights
-  CSS.highlights.delete('secret-highlight');
+  // Assign a unique highlight name to this element so multiple fields don't overwrite each other
+  if (!element._highlightName) {
+    element._highlightName = 'secret-highlight-' + (_highlightIdCounter++);
+    ensureHighlightCSS(element._highlightName);
+  }
+  const hlName = element._highlightName;
+
+  // Clear only THIS element's highlights
+  CSS.highlights.delete(hlName);
 
   const allRanges = [];
 
@@ -428,7 +453,7 @@ function updateHighlightPositionsContentEditable(element, secretStrings) {
     }
   }
 
-  console.log(`[IssueGuard] Found ${textNodes.length} text nodes, searching for ${secretStrings.length} secrets`);
+  console.log(`[IssueGuard] Found ${textNodes.length} text nodes, searching for ${secretStrings.length} secrets (highlight: ${hlName})`);
 
   // For each secret string, find it in the text nodes and create ranges
   secretStrings.forEach(secretString => {
@@ -452,11 +477,11 @@ function updateHighlightPositionsContentEditable(element, secretStrings) {
     });
   });
 
-  // Create a Highlight object with all ranges and register it
+  // Create a Highlight object with all ranges and register it under THIS element's unique name
   if (allRanges.length > 0) {
     const highlight = new Highlight(...allRanges);
-    CSS.highlights.set('secret-highlight', highlight);
-    console.log(`[IssueGuard] Created CSS highlight with ${allRanges.length} ranges`);
+    CSS.highlights.set(hlName, highlight);
+    console.log(`[IssueGuard] Created CSS highlight '${hlName}' with ${allRanges.length} ranges`);
   }
 
   // Store reference for cleanup
@@ -464,18 +489,8 @@ function updateHighlightPositionsContentEditable(element, secretStrings) {
   element._highlightRanges = allRanges;
 }
 
-// Add CSS for the custom highlight (only once)
-if (!document.querySelector('#issueguard-highlight-style')) {
-  const highlightStyle = document.createElement('style');
-  highlightStyle.id = 'issueguard-highlight-style';
-  highlightStyle.textContent = `
-    ::highlight(secret-highlight) {
-      background-color: rgba(244, 67, 54, 0.35);
-      color: inherit;
-    }
-  `;
-  document.head.appendChild(highlightStyle);
-}
+// The highlight style element is now created lazily by ensureHighlightCSS()
+// when the first contenteditable element needs highlighting.
 
 // Function to position highlights based on text position in textarea
 // Supports both textareas AND contenteditable elements (like GitLab's ProseMirror editor)
@@ -504,12 +519,16 @@ function updateHighlightPositions(textarea, secretStrings) {
 
   // Get textarea's current scroll position and boundaries
   const textareaRect = textarea.getBoundingClientRect();
+  const parentRect = textarea.parentElement ? textarea.parentElement.getBoundingClientRect() : textareaRect;
   const scrollTop = textarea.scrollTop;
   const scrollLeft = textarea.scrollLeft;
 
-  // Get textarea's position relative to its parent
-  const textareaOffsetLeft = textarea.offsetLeft;
-  const textareaOffsetTop = textarea.offsetTop;
+  // Calculate textarea's position relative to its parent using getBoundingClientRect
+  // This is immune to offsetParent mismatches that occur on GitHub edit/comment forms
+  const parentScrollLeft = textarea.parentElement ? textarea.parentElement.scrollLeft : 0;
+  const parentScrollTop = textarea.parentElement ? textarea.parentElement.scrollTop : 0;
+  const textareaRelativeLeft = textareaRect.left - parentRect.left + parentScrollLeft;
+  const textareaRelativeTop = textareaRect.top - parentRect.top + parentScrollTop;
 
   secretStrings.forEach(secretString => {
     let startIndex = 0;
@@ -525,9 +544,9 @@ function updateHighlightPositions(textarea, secretStrings) {
         if (position) {
           const overlay = createHighlightOverlay(textarea, secretString);
 
-          // Adjust position based on scroll and textarea offset within parent
-          const adjustedLeft = textareaOffsetLeft + position.left - scrollLeft;
-          const adjustedTop = textareaOffsetTop + position.top - scrollTop;
+          // Adjust position based on scroll and textarea position within parent
+          const adjustedLeft = textareaRelativeLeft + position.left - scrollLeft;
+          const adjustedTop = textareaRelativeTop + position.top - scrollTop;
 
           overlay.style.left = adjustedLeft + 'px';
           overlay.style.top = adjustedTop + 'px';
@@ -542,8 +561,8 @@ function updateHighlightPositions(textarea, secretStrings) {
             baseTop: position.top,
             width: position.width,
             height: position.height,
-            textareaOffsetLeft: textareaOffsetLeft,
-            textareaOffsetTop: textareaOffsetTop
+            textareaRelativeLeft: textareaRelativeLeft,
+            textareaRelativeTop: textareaRelativeTop
           });
 
           // Append to textarea's parent
@@ -570,7 +589,7 @@ function createMirrorDiv(textarea) {
   const mirror = document.createElement('div');
   const computedStyle = window.getComputedStyle(textarea);
 
-  // Copy relevant styles
+  // Copy relevant styles — must match the textarea's text rendering exactly
   mirror.style.position = 'absolute';
   mirror.style.visibility = 'hidden';
   mirror.style.whiteSpace = 'pre-wrap';
@@ -581,10 +600,17 @@ function createMirrorDiv(textarea) {
   mirror.style.fontWeight = computedStyle.fontWeight;
   mirror.style.lineHeight = computedStyle.lineHeight;
   mirror.style.letterSpacing = computedStyle.letterSpacing;
+  mirror.style.wordSpacing = computedStyle.wordSpacing;
+  mirror.style.textIndent = computedStyle.textIndent;
+  mirror.style.textTransform = computedStyle.textTransform;
+  mirror.style.wordBreak = computedStyle.wordBreak;
+  mirror.style.tabSize = computedStyle.tabSize;
   mirror.style.padding = computedStyle.padding;
   mirror.style.border = computedStyle.border;
   mirror.style.boxSizing = computedStyle.boxSizing;
-  mirror.style.width = textarea.scrollWidth + 'px';
+  // Use computed width to match the actual rendered width, not scrollWidth
+  // scrollWidth can be wider than the visible area and cause wrap mismatches
+  mirror.style.width = computedStyle.width;
   mirror.style.height = textarea.scrollHeight + 'px';
   mirror.style.left = '-9999px';
   mirror.style.top = '-9999px';
@@ -659,9 +685,10 @@ function removeHighlights(textarea) {
     orphanedHighlights.forEach(h => h.remove());
   }
 
-  // For contenteditable: clean up CSS Custom Highlight API
+  // For contenteditable: clean up CSS Custom Highlight API (per-element name)
   if (textarea._cssHighlightActive && CSS.highlights) {
-    CSS.highlights.delete('secret-highlight');
+    const hlName = textarea._highlightName || 'secret-highlight';
+    CSS.highlights.delete(hlName);
     textarea._cssHighlightActive = false;
   }
 
@@ -686,8 +713,8 @@ function setupHighlightTracking(textarea) {
 
       textarea._highlights.forEach(highlight => {
         if (highlight.element && highlight.element.parentElement) {
-          const adjustedLeft = highlight.textareaOffsetLeft + highlight.baseLeft - scrollLeft;
-          const adjustedTop = highlight.textareaOffsetTop + highlight.baseTop - scrollTop;
+          const adjustedLeft = highlight.textareaRelativeLeft + highlight.baseLeft - scrollLeft;
+          const adjustedTop = highlight.textareaRelativeTop + highlight.baseTop - scrollTop;
 
           highlight.element.style.left = adjustedLeft + 'px';
           highlight.element.style.top = adjustedTop + 'px';
@@ -711,13 +738,16 @@ function setupHighlightTracking(textarea) {
 
 // Function to check the description and update the indicator
 async function checkDescription(descriptionField, indicator, spinner) {
-  // Prevent multiple simultaneous checks
-  if (isChecking) {
-    console.log("Check already in progress, skipping...");
+  // Use per-field state to prevent cross-field interference
+  const fieldState = descriptionField._fieldState || { isChecking: false };
+
+  // Prevent multiple simultaneous checks for THIS field
+  if (fieldState.isChecking) {
+    console.log("Check already in progress for this field, skipping...");
     return;
   }
 
-  isChecking = true;
+  fieldState.isChecking = true;
   const description = getElementText(descriptionField).trim();
 
   try {
@@ -802,7 +832,7 @@ async function checkDescription(descriptionField, indicator, spinner) {
     const tooltipHTML = `<div style="font-weight: 700; font-size: 15px;">❌ Error</div><div style="margin-top: 8px; opacity: 0.95; font-size: 13px;">An error occurred while checking</div>`;
     indicator.setAttribute('data-tooltip', tooltipHTML);
   } finally {
-    isChecking = false;
+    fieldState.isChecking = false;
   }
 }
 
@@ -846,8 +876,10 @@ function startChecking(descriptionField) {
       return;
     } else {
       console.log("[IssueGuard] Handler exists but indicator missing - cleaning up and reinitializing...");
-      // Reset lastCheckedText so the same content will trigger a new scan
-      lastCheckedText = "";
+      // Reset per-field state so the same content will trigger a new scan
+      if (descriptionField._fieldState) {
+        descriptionField._fieldState.lastCheckedText = "";
+      }
       // Clean up the stale handler
       if (descriptionField._contentObserver) {
         descriptionField._contentObserver.disconnect();
@@ -858,15 +890,28 @@ function startChecking(descriptionField) {
     }
   }
 
-  // Clean up any existing global elements
+  // Clean up any existing global elements — but ONLY if they belong to the
+  // same parent container as the new field. This prevents destroying the
+  // comment field's indicator when the description editor is initialised.
+  const newParent = descriptionField.parentElement;
   if (currentIndicator && currentIndicator.parentElement) {
-    console.log("[IssueGuard] Cleaning up existing global elements...");
-    currentIndicator.remove();
-    currentIndicator = null;
+    if (currentIndicator.parentElement === newParent || !currentIndicator.parentElement.querySelector('textarea, [contenteditable="true"], .ProseMirror')) {
+      console.log("[IssueGuard] Cleaning up existing global elements (same container or orphaned)...");
+      currentIndicator.remove();
+      currentIndicator = null;
+    } else {
+      console.log("[IssueGuard] Keeping existing global indicator (belongs to a different active field).");
+      // Detach from globals so the new field gets its own
+      currentIndicator = null;
+    }
   }
   if (currentSpinner && currentSpinner.parentElement) {
-    currentSpinner.remove();
-    currentSpinner = null;
+    if (currentSpinner.parentElement === newParent || !currentSpinner.parentElement.querySelector('textarea, [contenteditable="true"], .ProseMirror')) {
+      currentSpinner.remove();
+      currentSpinner = null;
+    } else {
+      currentSpinner = null;
+    }
   }
 
 
@@ -939,6 +984,14 @@ function startChecking(descriptionField) {
 
   console.log("[IssueGuard] Starting secret detection...");
 
+  // Per-field state — isolates each field from global corruption
+  const fieldState = {
+    debounceTimer: null,
+    lastCheckedText: "",
+    isChecking: false
+  };
+  descriptionField._fieldState = fieldState;
+
   // Perform an IMMEDIATE check if there's existing content (critical for modal reopen)
   const initialText = getElementText(descriptionField).trim();
   console.log(`[IssueGuard] Initial text length: ${initialText.length}, content: "${initialText.substring(0, 50)}..."`);
@@ -946,7 +999,7 @@ function startChecking(descriptionField) {
     console.log('[IssueGuard] Triggering immediate check for existing content...');
     // Show spinner immediately so user knows scan is in progress
     spinner.style.display = "block";
-    lastCheckedText = initialText;
+    fieldState.lastCheckedText = initialText;
     checkDescription(descriptionField, indicator, spinner);
   }
 
@@ -960,8 +1013,8 @@ function startChecking(descriptionField) {
     const currentText = getElementText(descriptionField).trim();
 
     // Clear existing timer
-    if (debounceTimer) {
-      clearTimeout(debounceTimer);
+    if (fieldState.debounceTimer) {
+      clearTimeout(fieldState.debounceTimer);
     }
 
     // IMMEDIATE: Update highlight positions as user types (for real-time positioning)
@@ -982,14 +1035,14 @@ function startChecking(descriptionField) {
     }
 
     // Only check if text has actually changed
-    if (currentText === lastCheckedText) {
+    if (currentText === fieldState.lastCheckedText) {
       return;
     }
 
     // Set up new debounced check
-    debounceTimer = setTimeout(() => {
+    fieldState.debounceTimer = setTimeout(() => {
       console.log("[IssueGuard] Running debounced check after content change...");
-      lastCheckedText = currentText;
+      fieldState.lastCheckedText = currentText;
       checkDescription(descriptionField, indicator, spinner);
     }, DEBOUNCE_DELAY_MS);
   };
@@ -997,14 +1050,14 @@ function startChecking(descriptionField) {
   // Force immediate check (bypasses debounce)
   const forceImmediateCheck = () => {
     const currentText = getElementText(descriptionField).trim();
-    if (currentText !== lastCheckedText && currentText.length > 0) {
+    if (currentText !== fieldState.lastCheckedText && currentText.length > 0) {
       console.log('[IssueGuard] Forcing immediate check...');
       // Clear any pending debounce timer
-      if (debounceTimer) {
-        clearTimeout(debounceTimer);
-        debounceTimer = null;
+      if (fieldState.debounceTimer) {
+        clearTimeout(fieldState.debounceTimer);
+        fieldState.debounceTimer = null;
       }
-      lastCheckedText = currentText;
+      fieldState.lastCheckedText = currentText;
       checkDescription(descriptionField, indicator, spinner);
     }
   };
@@ -1181,20 +1234,47 @@ function handleNewIssuePage() {
   const platform = detectPlatform();
   let descriptionField;
 
+  // Helper to find an unmonitored GitLab editor, preferring those inside modals/dialogs
+  const findGitLabEditor = () => {
+    const modalSelectors = '[role="dialog"], .gl-modal, .modal-dialog, .gl-drawer, [data-testid="work-item-modal"]';
+    const editorSelectors = [
+      '#issue-description',
+      'textarea[name="issue[description]"]',
+      '.js-gfm-input',
+      'textarea[data-testid="issue-description"]',
+      'textarea[placeholder*="Write a comment"]',
+      'textarea[placeholder*="Write or drag"]',
+      '.ProseMirror',
+      '[contenteditable="true"][data-placeholder]',
+      '.gl-editor textarea',
+      '.md-area textarea',
+      '.js-vue-markdown-field textarea'
+    ];
+
+    // First: look inside modals for unmonitored editors
+    const modals = document.querySelectorAll(modalSelectors);
+    for (const modal of modals) {
+      for (const sel of editorSelectors) {
+        const el = modal.querySelector(sel);
+        if (el && el.offsetParent !== null && !el._secretDetectorHandler && !activeCommentMonitors.has(el)) {
+          return el;
+        }
+      }
+    }
+
+    // Fallback: look globally for unmonitored editors
+    for (const sel of editorSelectors) {
+      const el = document.querySelector(sel);
+      if (el && !el._secretDetectorHandler && !activeCommentMonitors.has(el)) {
+        return el;
+      }
+    }
+
+    return null;
+  };
+
   if (platform === 'gitlab') {
-    // GitLab issue description selectors
-    // GitLab uses various editor types: plain textarea, rich text editor (ProseMirror/Tiptap), or markdown
-    descriptionField = document.querySelector('#issue-description') ||
-      document.querySelector('textarea[name="issue[description]"]') ||
-      document.querySelector('.js-gfm-input') ||
-      document.querySelector('textarea[data-testid="issue-description"]') ||
-      document.querySelector('textarea[placeholder*="Write a comment"]') ||
-      document.querySelector('textarea[placeholder*="Write or drag"]') ||
-      document.querySelector('.ProseMirror') ||
-      document.querySelector('[contenteditable="true"][data-placeholder]') ||
-      document.querySelector('.gl-editor textarea') ||
-      document.querySelector('.md-area textarea') ||
-      document.querySelector('.js-vue-markdown-field textarea');
+    descriptionField = findGitLabEditor();
   } else {
     // GitHub issue description selectors
     descriptionField = document.querySelector('textarea[aria-label="Markdown value"]');
@@ -1214,17 +1294,7 @@ function handleNewIssuePage() {
       let newDescriptionField;
 
       if (platform === 'gitlab') {
-        newDescriptionField = document.querySelector('#issue-description') ||
-          document.querySelector('textarea[name="issue[description]"]') ||
-          document.querySelector('.js-gfm-input') ||
-          document.querySelector('textarea[data-testid="issue-description"]') ||
-          document.querySelector('textarea[placeholder*="Write a comment"]') ||
-          document.querySelector('textarea[placeholder*="Write or drag"]') ||
-          document.querySelector('.ProseMirror') ||
-          document.querySelector('[contenteditable="true"][data-placeholder]') ||
-          document.querySelector('.gl-editor textarea') ||
-          document.querySelector('.md-area textarea') ||
-          document.querySelector('.js-vue-markdown-field textarea');
+        newDescriptionField = findGitLabEditor();
       } else {
         newDescriptionField = document.querySelector('textarea[aria-label="Markdown value"]');
       }
@@ -1246,25 +1316,56 @@ function handleNewIssuePage() {
   }
 }
 
+// Helper: determine if an element is a GitLab *comment* field (rather than a description field)
+function isGitLabCommentField(el) {
+  // Explicitly comment-related selectors
+  if (el.matches('#note_note, textarea[name="note[note]"], .js-note-text')) return true;
+  if (el.matches('textarea[placeholder*="Write a comment"], textarea[placeholder*="Write or drag"]')) return true;
+
+  // A ProseMirror / contenteditable inside the Activity / notes section is a comment editor
+  const activitySection = el.closest('.notes, .issuable-discussion, [data-testid="work-item-notes"], .js-notes-wrapper');
+  if (activitySection) return true;
+
+  // If it lives in a reply form or note form it's a comment
+  const noteForm = el.closest('.js-main-target-form, .js-note-edit-form, .note-edit-form, .timeline-content');
+  if (noteForm) return true;
+
+  return false;
+}
+
 function handleEditIssuePage() {
   const platform = detectPlatform();
   let descriptionField;
 
   if (platform === 'gitlab') {
-    // GitLab issue body/comment selectors (multiple editor types)
-    descriptionField = document.querySelector('#issue-description') ||
-      document.querySelector('textarea[name="issue[description]"]') ||
-      document.querySelector('.js-gfm-input') ||
-      document.querySelector('#note_note') ||
-      document.querySelector('textarea[name="note[note]"]') ||
-      document.querySelector('textarea[data-testid="issue-description"]') ||
-      document.querySelector('textarea[placeholder*="Write a comment"]') ||
-      document.querySelector('textarea[placeholder*="Write or drag"]') ||
-      document.querySelector('.ProseMirror') ||
-      document.querySelector('[contenteditable="true"][data-placeholder]') ||
-      document.querySelector('.gl-editor textarea') ||
-      document.querySelector('.md-area textarea') ||
-      document.querySelector('.js-vue-markdown-field textarea');
+    // GitLab description-only selectors (NOT comment fields)
+    const descSelectors = [
+      '#issue-description',
+      'textarea[name="issue[description]"]',
+      'textarea[data-testid="issue-description"]',
+      '.gl-editor textarea',
+      '.md-area textarea',
+      '.js-vue-markdown-field textarea'
+    ];
+
+    for (const sel of descSelectors) {
+      const el = document.querySelector(sel);
+      if (el && el.offsetParent !== null && !el._secretDetectorHandler && !activeCommentMonitors.has(el)) {
+        descriptionField = el;
+        break;
+      }
+    }
+
+    // Fallback: ProseMirror / contenteditable that is NOT inside a comment area
+    if (!descriptionField) {
+      const allPM = document.querySelectorAll('.ProseMirror, [contenteditable="true"][data-placeholder], .js-gfm-input');
+      for (const el of allPM) {
+        if (el.offsetParent !== null && !el._secretDetectorHandler && !activeCommentMonitors.has(el) && !isGitLabCommentField(el)) {
+          descriptionField = el;
+          break;
+        }
+      }
+    }
   } else {
     // GitHub issue body/comment selectors
     descriptionField = document.querySelector('textarea[name="issue[body]"]') ||
@@ -1294,9 +1395,16 @@ function handleEditIssuePage() {
 
       allTextareas.forEach(textarea => {
         // Only attach if not already monitoring
-        if (textarea && !textarea._secretDetectorHandler && textarea.offsetParent !== null) {
-          console.log("New or modified issue body textarea detected, starting detection...");
-          startChecking(textarea);
+        if (textarea && !textarea._secretDetectorHandler && !activeCommentMonitors.has(textarea) && textarea.offsetParent !== null) {
+          if (platform === 'gitlab' && isGitLabCommentField(textarea)) {
+            // Route to per-field comment monitoring
+            console.log("[IssueGuard] New GitLab comment field detected by observer, using per-field monitor...");
+            const fieldIndex = activeCommentMonitors.size;
+            startCheckingCommentField(textarea, fieldIndex);
+          } else {
+            console.log("New or modified issue body textarea detected, starting detection...");
+            startChecking(textarea);
+          }
         }
       });
     });
@@ -1372,8 +1480,16 @@ function monitorCommentFields() {
   let commentFields;
 
   if (platform === 'gitlab') {
-    // GitLab comment field selectors
-    commentFields = document.querySelectorAll('#note_note, textarea[name="note[note]"], .js-note-text, textarea[placeholder*="Write a comment"], textarea[placeholder*="Write or drag"]');
+    // GitLab comment field selectors — include ProseMirror editors in the comment/activity area
+    const basicCommentFields = document.querySelectorAll('#note_note, textarea[name="note[note]"], .js-note-text, textarea[placeholder*="Write a comment"], textarea[placeholder*="Write or drag"]');
+
+    // Also find ProseMirror / contenteditable editors that live in the comment section
+    const allRichEditors = document.querySelectorAll('.ProseMirror, [contenteditable="true"][data-placeholder]');
+    const commentProseMirrors = Array.from(allRichEditors).filter(el => isGitLabCommentField(el));
+
+    // Merge into a single list (avoid duplicates)
+    const merged = new Set([...basicCommentFields, ...commentProseMirrors]);
+    commentFields = merged;
   } else {
     // GitHub comment field selectors
     commentFields = document.querySelectorAll('textarea[placeholder*="Use Markdown to format your comment"], textarea[placeholder*="comment" i]');
@@ -1398,7 +1514,9 @@ function monitorCommentFields() {
       let newCommentFields;
 
       if (platform === 'gitlab') {
-        newCommentFields = document.querySelectorAll('#note_note, textarea[name="note[note]"], .js-note-text, textarea[placeholder*="Write a comment"], textarea[placeholder*="Write or drag"]');
+        const basicFields = document.querySelectorAll('#note_note, textarea[name="note[note]"], .js-note-text, textarea[placeholder*="Write a comment"], textarea[placeholder*="Write or drag"]');
+        const richEditors = Array.from(document.querySelectorAll('.ProseMirror, [contenteditable="true"][data-placeholder]')).filter(el => isGitLabCommentField(el));
+        newCommentFields = new Set([...basicFields, ...richEditors]);
       } else {
         newCommentFields = document.querySelectorAll('textarea[placeholder*="Use Markdown to format your comment"], textarea[placeholder*="comment" i]');
       }
@@ -1545,26 +1663,82 @@ function startCheckingCommentField(commentField, fieldIndex) {
     }, DEBOUNCE_DELAY_MS);
   };
 
-  // Attach input listener
-  commentField.addEventListener('input', handleInput);
+  // Check if this is a ProseMirror/contenteditable element (GitLab rich text editor)
+  const isContentEditable = commentField.isContentEditable ||
+    commentField.getAttribute('contenteditable') === 'true' ||
+    commentField.classList.contains('ProseMirror');
 
-  // Attach paste listener - triggers IMMEDIATE check after paste content is inserted (GitLab fix)
-  commentField.addEventListener('paste', () => {
-    // Wait for paste content to be inserted, then force immediate check
-    setTimeout(() => {
-      const currentText = getElementText(commentField).trim();
-      if (currentText !== fieldData.lastCheckedText && currentText.length > 0) {
-        console.log('[IssueGuard] Paste detected in comment field, triggering immediate check...');
-        // Clear any pending debounce timer
-        if (fieldData.debounceTimer) {
-          clearTimeout(fieldData.debounceTimer);
-          fieldData.debounceTimer = null;
+  if (isContentEditable) {
+    // For ProseMirror / contenteditable: use MutationObserver for reliable change detection
+    console.log(`[IssueGuard] Setting up MutationObserver for ProseMirror comment field ${fieldIndex}...`);
+
+    const contentObserver = new MutationObserver((mutations) => {
+      let hasContentChange = false;
+      for (const mutation of mutations) {
+        if (mutation.type === 'characterData' ||
+          mutation.type === 'childList' ||
+          (mutation.type === 'attributes' && mutation.target.nodeType === Node.TEXT_NODE)) {
+          hasContentChange = true;
+          break;
         }
-        fieldData.lastCheckedText = currentText;
-        checkCommentField(commentField, fieldData);
       }
-    }, 100);
-  });
+      if (hasContentChange) {
+        console.log(`[IssueGuard] ProseMirror comment field ${fieldIndex} content change detected`);
+        handleInput();
+      }
+    });
+
+    contentObserver.observe(commentField, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+      characterDataOldValue: true
+    });
+
+    // Store for cleanup
+    commentField._contentObserver = contentObserver;
+    fieldData.contentObserver = contentObserver;
+
+    // Also listen for paste and drop on contenteditable
+    const forceImmediateCommentCheck = () => {
+      setTimeout(() => {
+        const currentText = getElementText(commentField).trim();
+        if (currentText !== fieldData.lastCheckedText && currentText.length > 0) {
+          console.log(`[IssueGuard] Paste/drop on ProseMirror comment field ${fieldIndex}, immediate check...`);
+          if (fieldData.debounceTimer) {
+            clearTimeout(fieldData.debounceTimer);
+            fieldData.debounceTimer = null;
+          }
+          fieldData.lastCheckedText = currentText;
+          checkCommentField(commentField, fieldData);
+        }
+      }, 150);
+    };
+
+    commentField.addEventListener('paste', forceImmediateCommentCheck);
+    commentField.addEventListener('drop', forceImmediateCommentCheck);
+  } else {
+    // For regular textareas: use input event
+    commentField.addEventListener('input', handleInput);
+
+    // Attach paste listener - triggers IMMEDIATE check after paste content is inserted (GitLab fix)
+    commentField.addEventListener('paste', () => {
+      // Wait for paste content to be inserted, then force immediate check
+      setTimeout(() => {
+        const currentText = getElementText(commentField).trim();
+        if (currentText !== fieldData.lastCheckedText && currentText.length > 0) {
+          console.log('[IssueGuard] Paste detected in comment field, triggering immediate check...');
+          // Clear any pending debounce timer
+          if (fieldData.debounceTimer) {
+            clearTimeout(fieldData.debounceTimer);
+            fieldData.debounceTimer = null;
+          }
+          fieldData.lastCheckedText = currentText;
+          checkCommentField(commentField, fieldData);
+        }
+      }, 100);
+    });
+  }
 
   fieldData.inputHandler = handleInput;
 
@@ -1692,6 +1866,12 @@ function cleanupCommentField(commentField) {
     commentField.removeEventListener('input', fieldData.inputHandler);
   }
 
+  // Clean up MutationObserver for ProseMirror/contenteditable comment fields
+  if (fieldData.contentObserver) {
+    fieldData.contentObserver.disconnect();
+    delete commentField._contentObserver;
+  }
+
   // Remove highlights
   removeHighlights(commentField);
 
@@ -1757,16 +1937,19 @@ function checkCurrentPage() {
 
   // GitLab URL patterns (uses /-/ in the path)
   // GitLab new issue can be accessed via /issues/new OR via modal from /issues list page
+  // GitLab work items: /-/work_items can also be used to create new issues
   const gitlabNewIssuePattern = /-\/issues\/new\/?$/;
   const gitlabEditIssuePattern = /-\/issues\/\d+$/;
   const gitlabIssuesListPattern = /-\/issues\/?$/;  // Issues list page (can have new issue modal)
+  const gitlabWorkItemsPattern = /-\/work_items\/?$/;  // Work items page (can have new item modal)
+  const gitlabWorkItemEditPattern = /-\/work_items\/\d+$/;  // Individual work item page
 
   let isNewIssuePage = false;
   let isEditIssuePage = false;
 
   if (platform === 'gitlab') {
-    isNewIssuePage = gitlabNewIssuePattern.test(pathname) || gitlabIssuesListPattern.test(pathname);
-    isEditIssuePage = gitlabEditIssuePattern.test(pathname);
+    isNewIssuePage = gitlabNewIssuePattern.test(pathname) || gitlabIssuesListPattern.test(pathname) || gitlabWorkItemsPattern.test(pathname);
+    isEditIssuePage = gitlabEditIssuePattern.test(pathname) || gitlabWorkItemEditPattern.test(pathname);
   } else {
     isNewIssuePage = githubNewIssuePattern.test(pathname);
     isEditIssuePage = githubEditIssuePattern.test(pathname);
@@ -1864,23 +2047,46 @@ function setupGitLabModalWatcher() {
 
     // Check if ProseMirror editor exists and needs monitoring
     // IMPORTANT: Check for VISIBILITY to ensure we don't attach to hidden/closed editors
+    // IMPORTANT: Skip editors that are already being monitored (e.g., comment fields from an open issue)
+    // Prefer editors inside modals/dialogs (the "New Issue" modal) over background editors
     const allProseMirrors = document.querySelectorAll('.ProseMirror');
     const allDescriptions = document.querySelectorAll('#issue-description, textarea[name="issue[description]"], .js-gfm-input');
 
     let editorField = null;
 
-    // Find first visible ProseMirror
+    // Helper: check if an element is already being monitored
+    const isAlreadyMonitored = (el) => {
+      const hasIndicator = el.parentElement?.querySelector('.secret-detector-indicator');
+      return (el._secretDetectorHandler && hasIndicator) || activeCommentMonitors.has(el);
+    };
+
+    // Helper: check if an element is inside a modal/dialog
+    const isInsideModal = (el) => {
+      return !!el.closest('[role="dialog"], .gl-modal, .modal-dialog, .gl-drawer, [data-testid="work-item-modal"]');
+    };
+
+    // First pass: find unmonitored editors inside modals (highest priority)
     for (const el of allProseMirrors) {
-      if (el.offsetParent !== null) {
+      if (el.offsetParent !== null && !isAlreadyMonitored(el) && isInsideModal(el)) {
         editorField = el;
         break;
       }
     }
 
-    // If no ProseMirror, check descriptions
+    // Second pass: find any unmonitored visible ProseMirror
+    if (!editorField) {
+      for (const el of allProseMirrors) {
+        if (el.offsetParent !== null && !isAlreadyMonitored(el)) {
+          editorField = el;
+          break;
+        }
+      }
+    }
+
+    // Third pass: check description fields
     if (!editorField) {
       for (const el of allDescriptions) {
-        if (el.offsetParent !== null) {
+        if (el.offsetParent !== null && !isAlreadyMonitored(el)) {
           editorField = el;
           break;
         }
@@ -1896,10 +2102,13 @@ function setupGitLabModalWatcher() {
 
         // Even if monitored, check if there's content that needs scanning in case it was just restored
         const text = getElementText(editorField).trim();
-        if (text.length > 0 && text !== lastCheckedText) {
+        const editorLastChecked = editorField._fieldState ? editorField._fieldState.lastCheckedText : "";
+        if (text.length > 0 && text !== editorLastChecked) {
           console.log('[IssueGuard] Content changed/restored, forcing scan...');
-          // Force reset lastCheckedText to ensure scan runs
-          lastCheckedText = "";
+          // Force reset per-field state to ensure scan runs
+          if (editorField._fieldState) {
+            editorField._fieldState.lastCheckedText = "";
+          }
           const spinner = editorField.parentElement?.querySelector('.secret-detector-spinner');
           if (spinner) spinner.style.display = "block";
           checkDescription(editorField, existingIndicator, spinner);
@@ -1910,11 +2119,13 @@ function setupGitLabModalWatcher() {
       console.log('[IssueGuard] Found visible editor, initializing...');
       lastInitTime = now;
 
-      // Reset global state to ensure clean start
-      lastCheckedText = "";
+      // Per-field state is initialized inside startChecking()
 
       // Start monitoring - startChecking will handle cleanup if needed
       startChecking(editorField);
+
+      // Also ensure comment fields have their own independent monitors
+      monitorCommentFields();
 
       // POLLING: Schedule multiple checks to catch content that loads asynchronously
       // This is critical for when GitLab restores draft content after the editor appears
@@ -1928,14 +2139,17 @@ function setupGitLabModalWatcher() {
 
         if (text.length > 0) {
           // If we have text and haven't scanned it yet (or last scan was empty)
-          if (text !== lastCheckedText) {
+          const polledLastChecked = editorField._fieldState ? editorField._fieldState.lastCheckedText : "";
+          if (text !== polledLastChecked) {
             console.log('[IssueGuard] Polling found new content, triggering scan...');
             const indicator = editorField.parentElement?.querySelector('.secret-detector-indicator');
             const spinner = editorField.parentElement?.querySelector('.secret-detector-spinner');
 
             if (indicator && spinner) {
               spinner.style.display = "block";
-              lastCheckedText = text; // Update this BEFORE calling to prevent loops if logic changes
+              if (editorField._fieldState) {
+                editorField._fieldState.lastCheckedText = text;
+              }
               checkDescription(editorField, indicator, spinner);
             }
             return; // Stop polling if successful
@@ -1955,9 +2169,9 @@ function setupGitLabModalWatcher() {
 
   // Watch for new modals/drawers being added that contain editors
   const modalObserver = new MutationObserver((mutations) => {
-    // Only process if we're actually on a GitLab issues page
+    // Only process if we're actually on a GitLab issues or work items page
     const pathname = window.location.pathname;
-    if (!pathname.includes('issues')) return;
+    if (!pathname.includes('issues') && !pathname.includes('work_items')) return;
 
     let shouldCheck = false;
 

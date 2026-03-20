@@ -44,7 +44,8 @@ fi
 cat >> "$SHELL_RC" << EOF
 
 $MARKER
-# Wraps \`gh issue create/edit/comment\` to scan for secrets via IssueGuard.
+# Wraps \`gh issue create/edit/comment\` and \`glab issue create/update/note\`
+# to scan for secrets via IssueGuard.
 # To remove, delete this block from $SHELL_RC.
 gh() {
     # gh subcommands always come first: gh issue create/edit/comment ...
@@ -52,6 +53,14 @@ gh() {
         python3 "$WRAPPER" "\$@"
     else
         command gh "\$@"
+    fi
+}
+glab() {
+    # glab subcommands: glab issue create/update/note ...
+    if [ "\$1" = "issue" ] && { [ "\$2" = "create" ] || [ "\$2" = "update" ] || [ "\$2" = "note" ]; }; then
+        python3 "$WRAPPER" --glab "\$@"
+    else
+        command glab "\$@"
     fi
 }
 $MARKER_END
@@ -62,4 +71,4 @@ echo ""
 echo "To activate now, run:"
 echo "    source $SHELL_RC"
 echo ""
-echo "After that, \`gh issue create\` commands will be scanned automatically."
+echo "After that, \`gh issue create\` and \`glab issue create\` commands will be scanned automatically."

@@ -1,20 +1,26 @@
 #!/usr/bin/env python3
 """
-IssueGuard CLI Wrapper for `gh issue create`
+IssueGuard CLI Wrapper for `gh` and `glab` issue commands
 
-Intercepts `gh issue create` commands to scan the issue body for secrets
-before the issue is actually created on GitHub.
+Intercepts `gh issue create` and `glab issue create` commands to scan
+the issue body/description for secrets before the issue is actually created.
 
 Usage:
-    Replace `gh` with this wrapper (via alias or PATH), or call directly:
-        python issueguard.py issue create --title "Bug" --body "my secret text"
+    GitHub:  python issueguard.py issue create --title "Bug" --body "my secret text"
+    GitLab:  python issueguard.py --glab issue create --title "Bug" --description "text"
 
-Supported modes:
+Supported modes (GitHub / gh):
     - --body / -b: body provided inline
     - --body-file / -F: body read from a file (or stdin with "-")
     - --web / -w: opens browser, passed through without scanning
-    - --editor / -e: editor mode, passed through with a warning
-    - Interactive mode: passed through with a warning
+    - --editor / -e: editor mode
+    - Interactive mode
+
+Supported modes (GitLab / glab):
+    - --description / -d: description provided inline
+    - -d -: editor mode (opens editor for description)
+    - --web / -w: opens browser, passed through without scanning
+    - Interactive mode
 """
 
 import json
@@ -109,6 +115,15 @@ def find_gh_executable():
     return gh
 
 
+def find_glab_executable():
+    """Find the real `glab` executable."""
+    glab = shutil.which("glab")
+    if glab is None:
+        print(red("Error: `glab` (GitLab CLI) not found on PATH."))
+        sys.exit(1)
+    return glab
+
+
 def is_issue_create(args):
     """Check whether the command is `gh issue create`."""
     positional = [str(a) for a in args if not str(a).startswith("-")]
@@ -125,6 +140,23 @@ def is_issue_comment(args):
     """Check whether the command is `gh issue comment`."""
     positional = [str(a) for a in args if not str(a).startswith("-")]
     return len(positional) >= 2 and positional[0] == "issue" and positional[1] == "comment"
+
+
+def has_help_flag(args):
+    """Check whether --help or -h is in the args."""
+    return any(a in ("--help", "-h") for a in args)
+
+
+def is_issue_update(args):
+    """Check whether the command is `glab issue update`."""
+    positional = [str(a) for a in args if not str(a).startswith("-")]
+    return len(positional) >= 2 and positional[0] == "issue" and positional[1] == "update"
+
+
+def is_issue_note(args):
+    """Check whether the command is `glab issue note`."""
+    positional = [str(a) for a in args if not str(a).startswith("-")]
+    return len(positional) >= 2 and positional[0] == "issue" and positional[1] == "note"
 
 
 def extract_body(args):
@@ -378,6 +410,7 @@ def get_editor():
     """Get the user's preferred text editor."""
     editor = (
         os.environ.get("GH_EDITOR")
+        or os.environ.get("GLAB_EDITOR")
         or os.environ.get("VISUAL")
         or os.environ.get("EDITOR")
     )
@@ -667,6 +700,9 @@ def strip_subcommands(all_args, subcmds):
 def handle_issue_create(gh, all_args):
     remaining = strip_subcommands(all_args, ["issue", "create"])
 
+    if has_help_flag(remaining):
+        sys.exit(run_gh(gh, all_args))
+
     body, mode = extract_body(remaining)
     title = extract_title(remaining)
 
@@ -707,6 +743,9 @@ def handle_issue_create(gh, all_args):
 
 def handle_issue_edit(gh, all_args):
     remaining = strip_subcommands(all_args, ["issue", "edit"])
+
+    if has_help_flag(remaining):
+        sys.exit(run_gh(gh, all_args))
 
     body, mode = extract_edit_body(remaining)
 
@@ -761,6 +800,9 @@ def rebuild_comment_args(remaining, body=None):
 def handle_issue_comment(gh, all_args):
     remaining = strip_subcommands(all_args, ["issue", "comment"])
 
+    if has_help_flag(remaining):
+        sys.exit(run_gh(gh, all_args))
+
     body, mode = extract_edit_body(remaining)
 
     # Interactive mode: open editor for comment body, scan, then forward
@@ -780,20 +822,326 @@ def handle_issue_comment(gh, all_args):
     scan_and_confirm(body, gh, all_args)
 
 
+# ── GitLab (glab) support ───────────────────────────────────────────────────
+
+
+def extract_glab_description(args):
+    """
+    Parse glab argument list to extract the issue description.
+
+    glab uses -d / --description instead of gh's -b / --body.
+    When -d is "-", glab opens an editor (similar to gh --editor).
+
+    Returns:
+        (description_text, mode)
+        mode is one of: "inline", "editor", "web", "interactive"
+    """
+    i = 0
+    desc = None
+    mode = "interactive"
+
+    while i < len(args):
+        arg = args[i]
+
+        if arg in ("--web", "-w"):
+            return None, "web"
+
+        # --description <text> or -d <text>
+        if arg in ("--description", "-d"):
+            if i + 1 < len(args):
+                value = args[i + 1]
+                if value == "-":
+                    mode = "editor"
+                else:
+                    desc = value
+                    mode = "inline"
+                i += 2
+                continue
+            else:
+                return None, "interactive"
+
+        # --description=<text> or -d=<text>
+        if arg.startswith("--description="):
+            value = arg[len("--description="):]
+            if value == "-":
+                mode = "editor"
+            else:
+                desc = value
+                mode = "inline"
+            i += 1
+            continue
+        if arg.startswith("-d="):
+            value = arg[len("-d="):]
+            if value == "-":
+                mode = "editor"
+            else:
+                desc = value
+                mode = "inline"
+            i += 1
+            continue
+
+        i += 1
+
+    return desc, mode
+
+
+def extract_glab_note_message(args):
+    """
+    Parse glab args to extract note/comment message.
+    glab issue note uses -m / --message.
+
+    Returns:
+        (message_text, mode)
+        mode: "inline" or "interactive"
+    """
+    i = 0
+    msg = None
+    mode = "interactive"
+
+    while i < len(args):
+        arg = args[i]
+
+        if arg in ("--message", "-m"):
+            if i + 1 < len(args):
+                msg = args[i + 1]
+                mode = "inline"
+                i += 2
+                continue
+            else:
+                return None, "interactive"
+
+        if arg.startswith("--message="):
+            msg = arg[len("--message="):]
+            mode = "inline"
+            i += 1
+            continue
+        if arg.startswith("-m="):
+            msg = arg[len("-m="):]
+            mode = "inline"
+            i += 1
+            continue
+
+        i += 1
+
+    return msg, mode
+
+
+def rebuild_glab_create_args(remaining, title=None, description=None):
+    """
+    Rebuild glab args for `issue create`, injecting --title/--description
+    and stripping old flags.
+    """
+    result = ["issue", "create"]
+    i = 0
+    while i < len(remaining):
+        arg = remaining[i]
+
+        # Drop old --description / -d
+        if description is not None and arg in ("--description", "-d"):
+            i += 2
+            continue
+        if description is not None and (arg.startswith("--description=") or arg.startswith("-d=")):
+            i += 1
+            continue
+
+        # Drop old --title / -t
+        if title is not None and arg in ("--title", "-t"):
+            i += 2
+            continue
+        if title is not None and (arg.startswith("--title=") or arg.startswith("-t=")):
+            i += 1
+            continue
+
+        result.append(arg)
+        i += 1
+
+    if title is not None:
+        result.extend(["--title", title])
+    if description is not None:
+        result.extend(["--description", description])
+
+    return result
+
+
+def rebuild_glab_update_args(remaining, description=None):
+    """
+    Rebuild glab args for `issue update`, injecting --description
+    and stripping old description flag.
+    """
+    result = ["issue", "update"]
+    i = 0
+    while i < len(remaining):
+        arg = remaining[i]
+
+        if description is not None and arg in ("--description", "-d"):
+            i += 2
+            continue
+        if description is not None and (arg.startswith("--description=") or arg.startswith("-d=")):
+            i += 1
+            continue
+
+        result.append(arg)
+        i += 1
+
+    if description is not None:
+        result.extend(["--description", description])
+
+    return result
+
+
+def rebuild_glab_note_args(remaining, message=None):
+    """
+    Rebuild glab args for `issue note`, injecting --message
+    and stripping old message flag.
+    """
+    result = ["issue", "note"]
+    i = 0
+    while i < len(remaining):
+        arg = remaining[i]
+
+        if message is not None and arg in ("--message", "-m"):
+            i += 2
+            continue
+        if message is not None and (arg.startswith("--message=") or arg.startswith("-m=")):
+            i += 1
+            continue
+
+        result.append(arg)
+        i += 1
+
+    if message is not None:
+        result.extend(["--message", message])
+
+    return result
+
+
+def handle_glab_issue_create(glab, all_args):
+    remaining = strip_subcommands(all_args, ["issue", "create"])
+
+    if has_help_flag(remaining):
+        sys.exit(run_gh(glab, all_args))
+
+    desc, mode = extract_glab_description(remaining)
+    title = extract_title(remaining)
+
+    # Web mode: pass through
+    if mode == "web":
+        print(dim("[IssueGuard] --web mode: opening browser, skipping secret scan."))
+        sys.exit(run_gh(glab, all_args))
+
+    # Editor mode (-d -): open our editor, scan, then forward
+    if mode == "editor":
+        if title is None:
+            title = collect_title_interactively()
+        print(dim("[IssueGuard] Opening editor for issue description..."))
+        ed_body = open_editor_for_body()
+        forward = rebuild_glab_create_args(remaining, title=title, description=ed_body or "")
+        if ed_body and ed_body.strip():
+            scan_and_confirm(ed_body, glab, forward)
+        else:
+            sys.exit(run_gh(glab, forward))
+
+    # Interactive mode: only intercept if truly bare (no flags at all)
+    # e.g. `glab issue create` with no arguments → collect title/description
+    # but `glab issue create -t "ok" -l bug` without -d → pass through
+    if mode == "interactive":
+        if remaining:
+            # Has other flags but no -d, let glab handle it
+            sys.exit(run_gh(glab, all_args))
+        if title is None:
+            title = collect_title_interactively()
+        desc = collect_body_interactively()
+        forward = rebuild_glab_create_args(remaining, title=title, description=desc)
+        if desc and desc.strip():
+            scan_and_confirm(desc, glab, forward)
+        else:
+            sys.exit(run_gh(glab, forward))
+
+    # Inline: description already extracted
+    if not desc or not desc.strip():
+        sys.exit(run_gh(glab, all_args))
+
+    scan_and_confirm(desc, glab, all_args)
+
+
+def handle_glab_issue_update(glab, all_args):
+    remaining = strip_subcommands(all_args, ["issue", "update"])
+
+    if has_help_flag(remaining):
+        sys.exit(run_gh(glab, all_args))
+
+    desc, mode = extract_glab_description(remaining)
+
+    # No -d/--description flag: pass through to glab (e.g. --unassign, --label, etc.)
+    if mode == "interactive":
+        sys.exit(run_gh(glab, all_args))
+
+    # Editor mode (-d -): open our editor, scan, then forward
+    if mode == "editor":
+        print(dim("[IssueGuard] Opening editor for issue description..."))
+        ed_body = open_editor_for_body()
+        forward = rebuild_glab_update_args(remaining, description=ed_body or "")
+        if ed_body and ed_body.strip():
+            scan_and_confirm(ed_body, glab, forward)
+        else:
+            sys.exit(run_gh(glab, forward))
+
+    # Inline: description already extracted
+    if not desc or not desc.strip():
+        sys.exit(run_gh(glab, all_args))
+
+    scan_and_confirm(desc, glab, all_args)
+
+
+def handle_glab_issue_note(glab, all_args):
+    remaining = strip_subcommands(all_args, ["issue", "note"])
+
+    if has_help_flag(remaining):
+        sys.exit(run_gh(glab, all_args))
+
+    msg, mode = extract_glab_note_message(remaining)
+
+    # No -m/--message flag: pass through to glab
+    if mode == "interactive":
+        sys.exit(run_gh(glab, all_args))
+
+    # Inline: message already extracted
+    if not msg or not msg.strip():
+        sys.exit(run_gh(glab, all_args))
+
+    scan_and_confirm(msg, glab, all_args)
+
+
 def main():
     all_args = sys.argv[1:]
 
-    gh = find_gh_executable()
+    # Detect platform mode: --glab flag switches to GitLab mode
+    glab_mode = False
+    if all_args and all_args[0] == "--glab":
+        glab_mode = True
+        all_args = all_args[1:]
 
-    if is_issue_create(all_args):
-        handle_issue_create(gh, all_args)
-    elif is_issue_edit(all_args):
-        handle_issue_edit(gh, all_args)
-    elif is_issue_comment(all_args):
-        handle_issue_comment(gh, all_args)
+    if glab_mode:
+        glab = find_glab_executable()
+        if is_issue_create(all_args):
+            handle_glab_issue_create(glab, all_args)
+        elif is_issue_update(all_args):
+            handle_glab_issue_update(glab, all_args)
+        elif is_issue_note(all_args):
+            handle_glab_issue_note(glab, all_args)
+        else:
+            sys.exit(run_gh(glab, all_args))
     else:
-        # Not an intercepted command — pass through
-        sys.exit(run_gh(gh, all_args))
+        gh = find_gh_executable()
+        if is_issue_create(all_args):
+            handle_issue_create(gh, all_args)
+        elif is_issue_edit(all_args):
+            handle_issue_edit(gh, all_args)
+        elif is_issue_comment(all_args):
+            handle_issue_comment(gh, all_args)
+        else:
+            # Not an intercepted command — pass through
+            sys.exit(run_gh(gh, all_args))
 
 
 if __name__ == "__main__":

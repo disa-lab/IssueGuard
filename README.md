@@ -115,3 +115,46 @@ Any public issue creation form containing text inputs
 ### Links
 Video demonstration: https://www.youtube.com/watch?v=kvbWA8rr9cU
 
+
+## CLI Tool
+
+In addition to the Chrome extension, IssueGuard includes a **CLI wrapper** that intercepts `gh issue create` commands and scans the issue body for secrets before they are published to GitHub.
+
+### How It Works
+
+When you run `gh issue create --body "..."`, the wrapper:
+
+1. Extracts the issue body from the arguments (or reads from a file / stdin)
+2. Sends it to the IssueGuard API (`localhost:8000/detect`) for analysis
+3. **No secrets found** → proceeds normally
+4. **Secrets found** → displays them and asks for confirmation before publishing
+5. **API unreachable** → warns and proceeds (fail-open)
+
+### Installation
+
+**macOS / Linux**
+```bash
+cd cli-tool
+chmod +x setup.sh
+./setup.sh
+source ~/.bashrc   # or ~/.zshrc
+```
+
+**Windows (PowerShell)**
+```powershell
+cd cli-tool
+.\setup.ps1
+. $PROFILE.CurrentUserAllHosts
+```
+
+After setup, the `gh` alias is transparently replaced by the wrapper — your normal `gh` workflow remains unchanged, and all non-`issue create` commands pass through unmodified.
+
+### Configuration
+
+| Environment Variable | Default | Description |
+|---|---|---|
+| `ISSUEGUARD_API_URL` | `http://localhost:8000/detect` | API endpoint URL |
+| `ISSUEGUARD_TIMEOUT` | `30` | Request timeout in seconds |
+
+For full details and uninstall instructions, see [cli-tool/README.md](cli-tool/README.md).
+
