@@ -19,9 +19,9 @@ When you run `gh issue create --body "..."`, the wrapper:
 | `--body` / `-b` | ✅ Body extracted and scanned |
 | `--body-file` / `-F` | ✅ File contents read and scanned |
 | `-F -` (stdin) | ✅ Stdin read and scanned |
-| `--web` / `-w` | ⏭ Passed through (browser mode) |
-| `--editor` / `-e` | ⏭ Passed through with warning |
-| Interactive mode | ⏭ Passed through with warning |
+| `--editor` / `-e` | ✅ Body extracted and scanned |
+| Interactive mode | ✅ Body extracted and scanned |
+| `--web` / `-w` | ⏭ Passed through (browser extension mode) |
 
 All other `gh` commands (e.g., `gh pr create`, `gh repo view`) pass through unchanged.
 
