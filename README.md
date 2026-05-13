@@ -1,5 +1,7 @@
 # IssueGuard: Real-Time Secret Leak Prevention Tool
 
+[Paper Link](https://conf.researchr.org/details/fse-2026/fse-2026-demonstrations/8/IssueGuard-Real-Time-Secret-Leak-Prevention-Tool-for-GitHub-Issue-Reports)
+
 IssueGuard is a Google Chrome extension designed to detect sensitive information such as API keys, tokens, passwords, and credentials within GitHub issue reports. The tool combines regex-based candidate extraction with a fine-tuned CodeBERT model to provide accurate, context-aware secret detection in real time.
 
 This system helps users analyze issue content directly on the GitHub page, preventing accidental secret leakage without requiring developers to navigate away from their workflow.
